@@ -1,0 +1,173 @@
+{
+  "app_name": "CreatorAI",
+  "personality": "2 Material You / Expressive DARK",
+  "personality_one_liner": "A high-energy, digital playground for Gen-Z creators using expressive dark mode and tactile feedback to make AI content creation feel like unlocking a high score.",
+  "color": {
+    "surface": "#0A0A0A",
+    "onSurface": "#FFFFFF",
+    "surfaceSecondary": "#161616",
+    "onSurfaceSecondary": "#A3A3A3",
+    "surfaceTertiary": "#262626",
+    "onSurfaceTertiary": "#D4FF00",
+    "surfaceInverse": "#EFEFEF",
+    "onSurfaceInverse": "#0A0A0A",
+    "brand": "#CCFF00",
+    "brandPrimary": "#CCFF00",
+    "onBrandPrimary": "#000000",
+    "brandSecondary": "#E6FF66",
+    "onBrandSecondary": "#000000",
+    "brandTertiary": "#334000",
+    "onBrandTertiary": "#CCFF00",
+    "success": "#00FF66",
+    "onSuccess": "#003314",
+    "warning": "#FFCC00",
+    "onWarning": "#332900",
+    "error": "#FF3366",
+    "onError": "#330014",
+    "info": "#00E6FF",
+    "onInfo": "#002E33",
+    "border": "#262626",
+    "borderStrong": "#404040",
+    "divider": "#1E1E1E"
+  },
+  "typography": {
+    "displayFontFamily": "Outfit",
+    "textFontFamily": "Figtree",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room to allow dark mode surfaces to separate through tone rather than borders. Chunky, tactile spacing for controls.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Sticky headers over scrollable lists",
+      "Bottom tab bar background",
+      "Floating action buttons and 'Create Content' sticky CTA container",
+      "Hero streak card overlays"
+    ],
+    "dont's": [
+      "Form fields and inputs",
+      "Standard list rows",
+      "Body text regions"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding",
+      "purpose": "Gamified entry flow allowing users to pick their niche and goals.",
+      "states": {
+        "loading": "Centered brandPrimary spinner.",
+        "empty": "N/A",
+        "error": "Standard error toast with Retry."
+      },
+      "layout": "Vertical stack. Huge display header 'CHOOSE YOUR NICHE'. Grid of oversized selectable pills (surfaceTertiary) that flip to brandTertiary when active. Big sticky 'LOCK IN' bottom CTA."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "The pulse of the app, tracking streaks and showing recent AI posts.",
+      "states": {
+        "loading": "Skeleton cards mimicking the horizontal feeds.",
+        "empty": "Stylized 3D shape illustration + 'No chains yet. Start your first streak.' + 'CREATE NOW' CTA.",
+        "error": "Error message with 'RELOAD' button."
+      },
+      "layout": "Top header with large 'YOUR STREAK IS ALIVE' typography. Large progress ring/card for streak counting. Horizontal scroll of dark-themed cards for 'Recent Generated Content'. Pinned floating pill at bottom center 'CREATE CONTENT' wrapped in a glass container."
+    },
+    {
+      "name": "Content Generation Wizard",
+      "purpose": "A fluid, single-column configuration form for generating hooks, scripts, and hashtags.",
+      "states": {
+        "loading": "Full screen neon pulse animation indicating AI is 'thinking'.",
+        "empty": "N/A",
+        "error": "Bottom sheet error message 'Generation Failed'."
+      },
+      "layout": "Clean vertical scroll. Segmented controls (pill shaped) for duration (15s/30s/60s) and language. Large chunky toggle buttons. Sticky bottom CTA 'GENERATE MAGIC' above the home indicator."
+    },
+    {
+      "name": "AI Output Viewer",
+      "purpose": "Presents the generated script, hashtags, voiceover, and viral score in clear, actionable chunks.",
+      "states": {
+        "loading": "Skeleton UI blocks for cards.",
+        "empty": "N/A",
+        "error": "Retry generation card."
+      },
+      "layout": "Stacked floating glass cards over a dark texture background. One card for the Script (mono-spaced styled body). One card for 'Voiceover' with a tactile Play icon. One card for Viral Score (neon glowing metric). 'Schedule Post' sticky CTA."
+    },
+    {
+      "name": "Scheduler",
+      "purpose": "Visual calendar to see upcoming and scheduled posts.",
+      "states": {
+        "loading": "Skeleton calendar grid.",
+        "empty": "Calendar displays zero dots. 'No posts scheduled this month.'",
+        "error": "Failed to load calendar events."
+      },
+      "layout": "Calendar grid at the top with brandPrimary (Lime) dot indicators. Vertical list of scheduled posts below it in card format with dark image previews. 'Quick Schedule' floating FAB."
+    }
+  ],
+  "haptics": {
+    "events": {
+      "tab_press": "light",
+      "button_press": "medium",
+      "streak_complete": "heavy",
+      "niche_select": "light",
+      "generation_complete": "success"
+    }
+  },
+  "images": {
+    "hero_texture": {
+      "url": "https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwxfHxkYXJrJTIwZ3JhcGhpdGUlMjB0ZXh0dXJlJTIwbWluaW1hbHxlbnwwfHx8fDE3ODI5NzIwMDl8MA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwxfHxkYXJrJTIwZ3JhcGhpdGUlMjB0ZXh0dXJlJTIwbWluaW1hbHxlbnwwfHx8fDE3ODI5NzIwMDl8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Dark textured minimalist graphite background"
+    },
+    "streak_bg": {
+      "url": "https://images.unsplash.com/photo-1626908013351-800ddd734b8a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwyfHxuZW9uJTIwZ2xvd2luZyUyMHNoYXBlcyUyMGRhcmt8ZW58MHx8fHwxNzgyOTcyMDAzfDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1626908013351-800ddd734b8a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwyfHxuZW9uJTIwZ2xvd2luZyUyMHNoYXBlcyUyMGRhcmt8ZW58MHx8fHwxNzgyOTcyMDAzfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Abstract neon glowing shapes on dark background"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette: Deep Obsidian/Charcoal with Acid Lime (#CCFF00) accents. All purples, indigos, and blues are BANNED per prompt instructions.",
+    "Implement 'Material You / Expressive DARK' style. Maintain high contrast readability.",
+    "The primary CTA ('Create Content', 'Lock In', 'Generate Magic') must be sticky above the home indicator, housed in a glass or solid container so scrolling content disappears cleanly behind it.",
+    "Use Phosphor icons consistently. Ensure icons on dark surface are clearly legible.",
+    "For the Streak / Dashboard cards, use the streak_bg image combined with a top-to-bottom vertical linear gradient scrim (transparent to surfaceInverse ~70%) to ensure foreground metrics readability.",
+    "Ensure 'Figtree' is used for all body/tech readouts and 'Outfit' is exclusively for large, expressive display headers.",
+    "Embed haptic feedback on all primary interactions: tabs, niche selections, and a heavy success haptic when generating AI content.",
+    "Include a horizontal scroll view for 'Recent Generated Content' cards, utilizing proper edge margins so cards aren't flush to the screen edge.",
+    "Do not implement generic Material Material indigo styling; rely purely on the generated Lime+Graphite palette."
+  ]
+}
