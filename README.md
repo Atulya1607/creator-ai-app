@@ -35,25 +35,6 @@ CreatorAI is a modern full-stack AI platform that enables users to generate, man
 
 ---
 
-## 📂 Project Structure
-
-app/
-├── backend/
-│   ├── server.py
-│   ├── requirements.txt
-│   └── tests/
-│
-├── frontend/
-│   ├── app/
-│   ├── assets/
-│   ├── src/
-│   └── package.json
-│
-├── README.md
-└── .gitignore
-
----
-
 ## ⚙️ Setup Instructions
 
 ### 1. Clone Repository
