@@ -1,12 +1,19 @@
-# 🚀 CreatorAI App
+# 🚀 CreatorAI – Automated AI Content Creation Platform
 
-An AI-powered full-stack application for generating and managing intelligent content using modern technologies.
+CreatorAI is a full-stack AI-powered application that enables users to generate high-quality social media content including scripts, voiceovers, thumbnails, and videos — all in one place.
+
+The platform is designed to simplify content creation workflows and help users produce consistent, engaging, and scalable content for platforms like YouTube and Instagram.
 
 ---
 
-## 📌 Overview
+## 📌 Key Highlights
 
-CreatorAI is a modern full-stack AI platform that enables users to generate, manage, and interact with AI-based content through a fast and responsive interface. The project combines a powerful backend with a sleek frontend to deliver a seamless user experience.
+- 🎯 End-to-end AI content generation pipeline  
+- 🤖 Automated script, voiceover, and media generation  
+- 📱 Mobile-first responsive UI  
+- ⚡ High-performance backend with FastAPI  
+- 🔐 Secure authentication using JWT  
+- 🧠 Scalable architecture  
 
 ---
 
@@ -15,7 +22,7 @@ CreatorAI is a modern full-stack AI platform that enables users to generate, man
 ### Backend
 - Python
 - FastAPI
-- MongoDB
+- MongoDB (GridFS)
 - JWT Authentication
 
 ### Frontend
@@ -26,12 +33,12 @@ CreatorAI is a modern full-stack AI platform that enables users to generate, man
 
 ## ✨ Features
 
-- 🔐 User Authentication (Login / Signup)
-- 🤖 AI Content Generation
-- 📊 Content Management
-- 📱 Responsive Mobile UI
-- ⚡ High-performance APIs
-- 🔄 Real-time interaction
+- 🔐 User Authentication (Login / Signup)  
+- 🤖 AI Content Generation  
+- 🎙️ Voiceover Generation  
+- 🖼️ Thumbnail & Caption Suggestions  
+- 📊 Content Workflow Automation  
+- 📱 Responsive UI  
 
 ---
 
