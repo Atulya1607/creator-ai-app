@@ -59,6 +59,8 @@ export const NICHES = [
   'Gaming',
 ];
 
+export const VOICES = ['nova', 'alloy', 'echo', 'onyx', 'shimmer', 'fable', 'sage', 'ash', 'coral'];
+
 export const GOALS = [
   'Grow followers',
   'Post daily',

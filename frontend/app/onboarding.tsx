@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import {
-  View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator,
+  View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator, TextInput,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
 import { colors, spacing, radius, NICHES, GOALS } from '@/src/theme';
@@ -16,6 +17,8 @@ export default function Onboarding() {
 
   const [step, setStep] = useState<0 | 1>(0);
   const [niche, setNiche] = useState<string | null>(null);
+  const [customNiche, setCustomNiche] = useState('');
+  const [showCustom, setShowCustom] = useState(false);
   const [goals, setGoals] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -49,6 +52,23 @@ export default function Onboarding() {
     }
   };
 
+  const chooseNiche = (item: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setNiche(item);
+    setShowCustom(false);
+  };
+
+  const applyCustomNiche = () => {
+    const v = customNiche.trim();
+    if (!v) {
+      setErr('Enter your custom niche');
+      return;
+    }
+    setErr(null);
+    setNiche(v);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }}>
       <ScrollView contentContainerStyle={{ padding: spacing.xl, paddingBottom: 140 }}>
@@ -68,8 +88,7 @@ export default function Onboarding() {
                 key={item}
                 testID={`onboarding-chip-${item.toLowerCase().replace(/\s+/g, '-')}`}
                 onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  if (step === 0) setNiche(item);
+                  if (step === 0) chooseNiche(item);
                   else toggleGoal(item);
                 }}
                 style={[styles.pill, active && styles.pillActive]}
@@ -78,7 +97,44 @@ export default function Onboarding() {
               </Pressable>
             );
           })}
+          {step === 0 && (
+            <Pressable
+              testID="onboarding-chip-custom"
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowCustom(true);
+              }}
+              style={[styles.pill, styles.customPill, showCustom && styles.pillActive]}
+            >
+              <Ionicons name="add-circle" size={16} color={showCustom ? colors.brandPrimary : colors.onSurface} />
+              <Text style={[styles.pillText, showCustom && styles.pillTextActive]}>Custom</Text>
+            </Pressable>
+          )}
         </View>
+
+        {step === 0 && showCustom && (
+          <View style={styles.customBox}>
+            <Text style={styles.customLabel}>YOUR CUSTOM NICHE</Text>
+            <TextInput
+              testID="onboarding-custom-input"
+              value={customNiche}
+              onChangeText={setCustomNiche}
+              placeholder="e.g. Bonsai care, Rocket engineering, K-pop dance"
+              placeholderTextColor={colors.onSurfaceSecondary}
+              autoFocus
+              style={styles.customInput}
+            />
+            <Pressable
+              testID="onboarding-custom-apply"
+              onPress={applyCustomNiche}
+              style={styles.customApply}
+            >
+              <Text style={styles.customApplyText}>
+                {niche && !NICHES.includes(niche) ? `USING: ${niche.toUpperCase()}` : 'USE THIS NICHE'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
 
         {err && <Text style={styles.err}>{err}</Text>}
       </ScrollView>
@@ -123,6 +179,23 @@ const styles = StyleSheet.create({
   pillActive: { backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary },
   pillText: { color: colors.onSurface, fontWeight: '700', fontSize: 15 },
   pillTextActive: { color: colors.onBrandTertiary },
+  customPill: { flexDirection: 'row', gap: spacing.xs, alignItems: 'center' },
+  customBox: {
+    marginTop: spacing.lg, padding: spacing.lg,
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.brandTertiary,
+  },
+  customLabel: { color: colors.brandPrimary, fontSize: 11, letterSpacing: 1.5, fontWeight: '800', marginBottom: spacing.sm },
+  customInput: {
+    backgroundColor: colors.surfaceTertiary, color: colors.onSurface,
+    borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: 14,
+    fontSize: 15, borderWidth: 1, borderColor: colors.border,
+  },
+  customApply: {
+    marginTop: spacing.md, backgroundColor: colors.brandPrimary,
+    paddingVertical: 12, borderRadius: radius.pill, alignItems: 'center',
+  },
+  customApplyText: { color: colors.onBrandPrimary, fontWeight: '900', letterSpacing: 1 },
   err: { color: colors.error, marginTop: spacing.md, fontSize: 14 },
   footer: {
     position: 'absolute', left: 0, right: 0, bottom: 0,

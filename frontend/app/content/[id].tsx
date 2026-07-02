@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, Platform,
 } from 'react-native';
@@ -8,9 +8,13 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 
 import { colors, spacing, radius } from '@/src/theme';
 import { api, Content } from '@/src/api';
+import { ensureNotifPermission, scheduleReminder } from '@/src/notifications';
+
+const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL as string;
 
 export default function ContentDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -23,11 +27,27 @@ export default function ContentDetail() {
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
   const [scheduling, setScheduling] = useState(false);
 
+  // TTS + video state
+  const [audioUri, setAudioUri] = useState<string | null>(null);
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [videoBusy, setVideoBusy] = useState(false);
+  const [videoUri, setVideoUri] = useState<string | null>(null);
+
+  const player = useAudioPlayer(audioUri ? { uri: audioUri } : null);
+  const playerStatus = useAudioPlayerStatus(player);
+
   const load = useCallback(async () => {
     if (!id) return;
     try {
       const data = await api.getContent(id);
       setC(data);
+      // If audio previously generated, point to server file
+      if (data.voiceover_ready) {
+        setAudioUri(`${BACKEND}/api/media/${data.id}.mp3`);
+      }
+      if (data.video_ready) {
+        setVideoUri(`${BACKEND}/api/media/${data.id}.mp4`);
+      }
     } finally {
       setLoading(false);
     }
@@ -35,9 +55,22 @@ export default function ContentDetail() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  useEffect(() => {
+    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+  }, []);
+
+  // Auto-stop when finished
+  const wasPlaying = useRef(false);
+  useEffect(() => {
+    if (playerStatus?.playing) wasPlaying.current = true;
+    if (wasPlaying.current && playerStatus?.didJustFinish) {
+      wasPlaying.current = false;
+    }
+  }, [playerStatus?.playing, playerStatus?.didJustFinish]);
+
   const flash = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 1600);
+    setTimeout(() => setToast(null), 1800);
   };
 
   const copy = async (text: string, label: string) => {
@@ -46,6 +79,62 @@ export default function ContentDetail() {
     flash(`${label} copied`);
   };
 
+  // ---- TTS ----
+  const genVoiceover = async () => {
+    if (!c) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setTtsBusy(true);
+    try {
+      const r = await api.voiceover(c.id, 'nova', 1.0);
+      // Prefer server file (streamable). Fallback to base64 data uri.
+      const uri = `${BACKEND}/api/media/${r.id}.mp3?ts=${Date.now()}`;
+      setAudioUri(uri);
+      setC({ ...c, voiceover_ready: true, voiceover_voice: r.voice });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      flash('Voiceover ready');
+    } catch (e: any) {
+      flash(e.message || 'TTS failed');
+    } finally {
+      setTtsBusy(false);
+    }
+  };
+
+  const togglePlay = () => {
+    if (!player) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (playerStatus?.playing) {
+      player.pause();
+    } else {
+      if (playerStatus?.didJustFinish || (playerStatus?.currentTime ?? 0) >= (playerStatus?.duration ?? 0)) {
+        player.seekTo(0);
+      }
+      player.play();
+    }
+  };
+
+  // ---- Video ----
+  const genVideo = async () => {
+    if (!c) return;
+    if (!c.voiceover_ready) {
+      flash('Generate voiceover first');
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setVideoBusy(true);
+    try {
+      const r = await api.video(c.id);
+      setVideoUri(`${BACKEND}${r.video_url}?ts=${Date.now()}`);
+      setC({ ...c, video_ready: true });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      flash('Video rendered!');
+    } catch (e: any) {
+      flash(e.message || 'Video failed');
+    } finally {
+      setVideoBusy(false);
+    }
+  };
+
+  // ---- Scheduler ----
   const openScheduler = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setPickerMode('date');
@@ -76,12 +165,28 @@ export default function ContentDetail() {
   const confirmSchedule = async (when?: Date) => {
     if (!c) return;
     const dt = when || pickedDate;
+    if (dt.getTime() <= Date.now()) {
+      flash('Pick a future time');
+      return;
+    }
     setScheduling(true);
     try {
       const updated = await api.schedule(c.id, dt.toISOString());
       setC(updated);
+      // Fire local reminder
+      const perm = await ensureNotifPermission();
+      if (perm.granted) {
+        await scheduleReminder({
+          contentId: c.id,
+          title: 'Time to post!',
+          body: (c.caption || c.ideas?.[0] || 'Your CreatorAI drop is ready.').slice(0, 120),
+          when: dt,
+        });
+        flash('Scheduled + reminder set');
+      } else {
+        flash('Scheduled (enable notifications for reminders)');
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      flash('Scheduled!');
     } catch (e: any) {
       flash(e.message || 'Failed');
     } finally {
@@ -98,6 +203,10 @@ export default function ContentDetail() {
     );
   }
 
+  const progress = playerStatus?.duration
+    ? Math.min(1, (playerStatus.currentTime ?? 0) / playerStatus.duration)
+    : 0;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={['top']}>
       <View style={styles.topBar}>
@@ -108,16 +217,12 @@ export default function ContentDetail() {
         <View style={styles.iconBtn} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 200 }}>
         {/* Viral score hero */}
         <View style={styles.hero}>
           <View style={styles.metaRow}>
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>{c.niche.toUpperCase()}</Text>
-            </View>
-            <Text style={styles.metaText}>
-              {c.duration} • {c.language} • {c.tone}
-            </Text>
+            <View style={styles.tag}><Text style={styles.tagText}>{c.niche.toUpperCase()}</Text></View>
+            <Text style={styles.metaText}>{c.duration} • {c.language} • {c.tone}</Text>
           </View>
 
           <View style={styles.scoreRow}>
@@ -135,12 +240,7 @@ export default function ContentDetail() {
         {/* Ideas */}
         <SectionTitle icon="bulb" title="TRENDING IDEAS" />
         {c.ideas.map((idea, i) => (
-          <Pressable
-            key={i}
-            testID={`idea-${i}`}
-            onPress={() => copy(idea, `Idea ${i + 1}`)}
-            style={styles.ideaCard}
-          >
+          <Pressable key={i} testID={`idea-${i}`} onPress={() => copy(idea, `Idea ${i + 1}`)} style={styles.ideaCard}>
             <Text style={styles.ideaNum}>{i + 1}</Text>
             <Text style={styles.ideaText}>{idea}</Text>
             <Ionicons name="copy-outline" size={18} color={colors.onSurfaceSecondary} />
@@ -153,23 +253,62 @@ export default function ContentDetail() {
           <Text testID="script-text" style={styles.mono}>{c.script}</Text>
         </View>
 
-        {/* Voiceover */}
+        {/* Voiceover with TTS */}
         <SectionTitle icon="mic" title="VOICEOVER" onCopy={() => copy(c.voiceover_text, 'Voiceover')} />
         <View style={styles.textCard}>
           <Text style={styles.body}>{c.voiceover_text}</Text>
+
+          <View style={styles.playerRow}>
+            {!audioUri ? (
+              <Pressable
+                testID="voiceover-generate-button"
+                onPress={genVoiceover}
+                disabled={ttsBusy}
+                style={styles.playPill}
+              >
+                {ttsBusy ? (
+                  <ActivityIndicator color={colors.onBrandPrimary} />
+                ) : (
+                  <>
+                    <Ionicons name="mic" size={16} color={colors.onBrandPrimary} />
+                    <Text style={styles.playText}>GENERATE VOICEOVER</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : (
+              <View style={styles.playerBox}>
+                <Pressable
+                  testID="voiceover-play-button"
+                  onPress={togglePlay}
+                  style={styles.playCircle}
+                >
+                  <Ionicons
+                    name={playerStatus?.playing ? 'pause' : 'play'}
+                    size={22}
+                    color={colors.onBrandPrimary}
+                  />
+                </Pressable>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.trackBg}>
+                    <View style={[styles.trackFg, { width: `${progress * 100}%` }]} />
+                  </View>
+                  <Text style={styles.trackTime}>
+                    {fmtTime(playerStatus?.currentTime ?? 0)} / {fmtTime(playerStatus?.duration ?? 0)}
+                    {c.voiceover_voice ? `  • ${c.voiceover_voice}` : ''}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Thumbnail */}
         <SectionTitle icon="image" title="THUMBNAIL IDEA" onCopy={() => copy(c.thumbnail_idea, 'Thumbnail idea')} />
-        <View style={styles.textCard}>
-          <Text style={styles.body}>{c.thumbnail_idea}</Text>
-        </View>
+        <View style={styles.textCard}><Text style={styles.body}>{c.thumbnail_idea}</Text></View>
 
         {/* Caption */}
         <SectionTitle icon="chatbubble-ellipses" title="CAPTION" onCopy={() => copy(c.caption, 'Caption')} />
-        <View style={styles.textCard}>
-          <Text style={styles.body}>{c.caption}</Text>
-        </View>
+        <View style={styles.textCard}><Text style={styles.body}>{c.caption}</Text></View>
 
         {/* Hashtags */}
         <SectionTitle
@@ -179,15 +318,67 @@ export default function ContentDetail() {
         />
         <View style={styles.tagWrap}>
           {c.hashtags.map((h, i) => (
-            <View key={i} style={styles.hashPill}>
-              <Text style={styles.hashText}>{h}</Text>
-            </View>
+            <View key={i} style={styles.hashPill}><Text style={styles.hashText}>{h}</Text></View>
           ))}
+        </View>
+
+        {/* Video export */}
+        <SectionTitle icon="film" title="VIDEO EXPORT" />
+        <View style={styles.textCard}>
+          <Text style={styles.body}>
+            Render a vertical MP4 (1080×1920) with your voiceover + on-screen text — ready to upload.
+          </Text>
+          {!videoUri ? (
+            <Pressable
+              testID="video-generate-button"
+              onPress={genVideo}
+              disabled={videoBusy}
+              style={[styles.playPill, { marginTop: spacing.md }]}
+            >
+              {videoBusy ? (
+                <>
+                  <ActivityIndicator color={colors.onBrandPrimary} />
+                  <Text style={styles.playText}>RENDERING…</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="film" size={16} color={colors.onBrandPrimary} />
+                  <Text style={styles.playText}>
+                    {c.voiceover_ready ? 'RENDER MP4' : 'GENERATE VOICEOVER FIRST'}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          ) : (
+            <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+              <View style={styles.videoBadge}>
+                <Ionicons name="checkmark-circle" size={16} color={colors.brandPrimary} />
+                <Text style={styles.videoBadgeText}>MP4 ready</Text>
+              </View>
+              <Pressable
+                testID="video-copy-url-button"
+                onPress={() => copy(videoUri, 'Video URL')}
+                style={styles.videoUrlBtn}
+              >
+                <Ionicons name="link" size={14} color={colors.onSurface} />
+                <Text numberOfLines={1} style={styles.videoUrl}>{videoUri}</Text>
+              </Pressable>
+              <Pressable
+                testID="video-regenerate-button"
+                onPress={genVideo}
+                disabled={videoBusy}
+                style={[styles.playPill, { backgroundColor: colors.surfaceTertiary }]}
+              >
+                <Ionicons name="refresh" size={14} color={colors.brandPrimary} />
+                <Text style={[styles.playText, { color: colors.brandPrimary }]}>RE-RENDER</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
 
         {c.scheduled_at && (
           <View style={styles.scheduledBox}>
-            <Ionicons name="calendar" size={16} color={colors.brandPrimary} />
+            <Ionicons name="calendar" size={16} color={colors.onBrandTertiary} />
             <Text style={styles.scheduledText}>
               Scheduled: {new Date(c.scheduled_at).toLocaleString()}
             </Text>
@@ -215,7 +406,6 @@ export default function ContentDetail() {
         </Pressable>
       </View>
 
-      {/* iOS: modal with inline picker + confirm; Android: native dialog via state */}
       {Platform.OS === 'ios' && (
         <Modal visible={showPicker} transparent animationType="slide" onRequestClose={() => setShowPicker(false)}>
           <Pressable style={styles.modalBg} onPress={() => setShowPicker(false)} />
@@ -230,11 +420,7 @@ export default function ContentDetail() {
               textColor={colors.onSurface}
               themeVariant="dark"
             />
-            <Pressable
-              testID="schedule-confirm-button"
-              onPress={() => confirmSchedule()}
-              style={styles.cta}
-            >
+            <Pressable testID="schedule-confirm-button" onPress={() => confirmSchedule()} style={styles.cta}>
               <Text style={styles.ctaText}>CONFIRM SCHEDULE</Text>
             </Pressable>
           </View>
@@ -259,6 +445,11 @@ export default function ContentDetail() {
       )}
     </SafeAreaView>
   );
+}
+
+function fmtTime(sec: number) {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 function SectionTitle({
@@ -334,9 +525,40 @@ const styles = StyleSheet.create({
   mono: { color: colors.onSurface, fontSize: 14, lineHeight: 22, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }) },
   body: { color: colors.onSurface, fontSize: 15, lineHeight: 22 },
 
+  playerRow: { marginTop: spacing.md },
+  playPill: {
+    flexDirection: 'row', gap: spacing.sm, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.brandPrimary, borderRadius: radius.pill,
+    paddingVertical: 12, paddingHorizontal: spacing.lg,
+  },
+  playText: { color: colors.onBrandPrimary, fontWeight: '900', letterSpacing: 1, fontSize: 13 },
+  playerBox: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: spacing.md,
+  },
+  playCircle: {
+    width: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.brandPrimary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  trackBg: { height: 4, backgroundColor: colors.border, borderRadius: 2, overflow: 'hidden' },
+  trackFg: { height: 4, backgroundColor: colors.brandPrimary },
+  trackTime: { color: colors.onSurfaceSecondary, fontSize: 11, marginTop: 6, fontWeight: '700' },
+
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   hashPill: { backgroundColor: colors.surfaceTertiary, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.pill },
   hashText: { color: colors.brandPrimary, fontSize: 12, fontWeight: '700' },
+
+  videoBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: colors.brandTertiary, alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill,
+  },
+  videoBadgeText: { color: colors.onBrandTertiary, fontSize: 12, fontWeight: '800' },
+  videoUrlBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.surfaceTertiary, padding: spacing.md, borderRadius: radius.md,
+  },
+  videoUrl: { flex: 1, color: colors.onSurface, fontSize: 11, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }) },
 
   scheduledBox: {
     marginTop: spacing.xl, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,

@@ -65,7 +65,19 @@ export type Content = {
   created_at: string;
   saved: boolean;
   scheduled_at?: string | null;
+  voiceover_ready?: boolean;
+  voiceover_voice?: string | null;
+  video_ready?: boolean;
 };
+
+export type VoiceoverResp = {
+  id: string;
+  audio_base64: string;
+  voice: string;
+  duration_hint: string;
+};
+
+export type VideoResp = { id: string; video_url: string };
 
 export type Stats = {
   total_generated: number;
@@ -111,6 +123,25 @@ export const api = {
   getContent: (id: string) => request<Content>(`/content/${id}`),
   deleteContent: (id: string) =>
     request<{ ok: boolean }>(`/content/${id}`, { method: 'DELETE' }),
+
+  // voiceover + video
+  voiceover: (id: string, voice = 'nova', speed = 1.0) =>
+    request<VoiceoverResp>(`/content/${id}/voiceover`, {
+      method: 'POST',
+      body: JSON.stringify({ voice, speed }),
+    }),
+  video: (id: string) =>
+    request<VideoResp>(`/content/${id}/video`, { method: 'POST' }),
+
+  // batch
+  batch: (payload: {
+    seed_idea: string; niche: string; tone: string;
+    duration: string; language: string; count: number;
+  }) =>
+    request<Content[]>('/content/batch', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // schedule
   schedule: (content_id: string, scheduled_at: string) =>

@@ -1,5 +1,6 @@
 """CreatorAI backend – FastAPI + MongoDB + Emergent LLM."""
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -12,9 +13,12 @@ import os
 import re
 import json
 import uuid
+import asyncio
 import logging
 import bcrypt
 import jwt
+import base64
+import subprocess
 
 # --- env ---
 ROOT_DIR = Path(__file__).parent
@@ -26,6 +30,11 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
 JWT_ALGO = "HS256"
 JWT_EXP_DAYS = 30
+
+# --- media dir (persisted between requests) ---
+MEDIA_DIR = Path("/tmp/creatorai_media")
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+FONT_PATH = "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
 
 # --- db ---
 client = AsyncIOMotorClient(MONGO_URL)
@@ -98,6 +107,9 @@ class GeneratedContent(BaseModel):
     created_at: datetime
     saved: bool = False
     scheduled_at: Optional[datetime] = None
+    voiceover_ready: bool = False
+    voiceover_voice: Optional[str] = None
+    video_ready: bool = False
 
 
 class ScheduleIn(BaseModel):
@@ -330,6 +342,291 @@ async def delete_content(content_id: str, user=Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+# ---------------- TTS ----------------
+class VoiceoverIn(BaseModel):
+    voice: str = "nova"  # alloy / ash / coral / echo / fable / nova / onyx / sage / shimmer
+    speed: float = 1.0
+
+
+class VoiceoverOut(BaseModel):
+    id: str
+    audio_base64: str
+    voice: str
+    duration_hint: str
+
+
+@api.post("/content/{content_id}/voiceover", response_model=VoiceoverOut)
+async def generate_voiceover(
+    content_id: str, body: VoiceoverIn, user=Depends(get_current_user)
+):
+    doc = await db.contents.find_one({"id": content_id, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    from emergentintegrations.llm.openai.text_to_speech import OpenAITextToSpeech
+
+    text = (doc.get("voiceover_text") or doc.get("script") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No voiceover text")
+    text = text[:4000]
+
+    tts = OpenAITextToSpeech(api_key=EMERGENT_LLM_KEY)
+    try:
+        audio_bytes = await tts.generate_speech(
+            text=text, model="tts-1", voice=body.voice, speed=body.speed, response_format="mp3"
+        )
+    except Exception as e:
+        log.exception("TTS failed")
+        raise HTTPException(status_code=502, detail=f"TTS failed: {e}")
+
+    # persist mp3 to media dir
+    audio_path = MEDIA_DIR / f"{content_id}.mp3"
+    audio_path.write_bytes(audio_bytes)
+
+    await db.contents.update_one(
+        {"id": content_id},
+        {"$set": {"voiceover_voice": body.voice, "voiceover_ready": True}},
+    )
+
+    return VoiceoverOut(
+        id=content_id,
+        audio_base64=base64.b64encode(audio_bytes).decode("utf-8"),
+        voice=body.voice,
+        duration_hint=doc.get("duration", "30s"),
+    )
+
+
+# ---------------- Video export (FFmpeg) ----------------
+class VideoOut(BaseModel):
+    id: str
+    video_url: str
+
+
+def _wrap_text(text: str, width: int = 26) -> str:
+    """Simple word-wrap for drawtext overlay."""
+    import textwrap
+    lines: List[str] = []
+    for para in text.split("\n"):
+        if not para.strip():
+            lines.append("")
+            continue
+        lines.extend(textwrap.wrap(para, width=width) or [""])
+    return "\n".join(lines[:16])  # cap ~16 lines
+
+
+def _escape_drawtext(t: str) -> str:
+    """Escape special chars for ffmpeg drawtext filter."""
+    return (
+        t.replace("\\", "\\\\")
+        .replace(":", r"\:")
+        .replace("'", r"\\'")
+        .replace("%", r"\%")
+    )
+
+
+@api.post("/content/{content_id}/video", response_model=VideoOut)
+async def generate_video(content_id: str, user=Depends(get_current_user)):
+    doc = await db.contents.find_one({"id": content_id, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    audio_path = MEDIA_DIR / f"{content_id}.mp3"
+    if not audio_path.exists():
+        raise HTTPException(
+            status_code=400, detail="Generate voiceover first (POST /voiceover)."
+        )
+
+    video_path = MEDIA_DIR / f"{content_id}.mp4"
+    txt_body_path = MEDIA_DIR / f"{content_id}_body.txt"
+    txt_footer_path = MEDIA_DIR / f"{content_id}_footer.txt"
+    txt_tag_path = MEDIA_DIR / f"{content_id}_tag.txt"
+
+    # Duration from mp3
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        dur = max(3.0, min(90.0, float(r.stdout.strip() or "20")))
+    except Exception:
+        dur = 20.0
+
+    # Build overlay text: hook + first ~200 chars of body
+    caption = (doc.get("caption") or "").strip()
+    idea = (doc.get("ideas") or ["Viral Drop"])[0]
+
+    txt_body_path.write_text(_wrap_text(idea or caption[:120], width=22), encoding="utf-8")
+    txt_footer_path.write_text(_wrap_text(caption[:100], width=28), encoding="utf-8")
+    txt_tag_path.write_text(f"#{(doc.get('niche') or 'AI').replace(' ', '')}", encoding="utf-8")
+
+    vf = (
+        f"drawtext=fontfile={FONT_PATH}:textfile={txt_body_path}:"
+        f"fontcolor=0xCCFF00:fontsize=72:x=(w-tw)/2:y=(h-th)/2-120:"
+        f"box=1:boxcolor=0x0A0A0A@0.4:boxborderw=24:line_spacing=10,"
+        f"drawtext=fontfile={FONT_PATH}:textfile={txt_footer_path}:"
+        f"fontcolor=white:fontsize=36:x=(w-tw)/2:y=h-th-160:"
+        f"box=1:boxcolor=0x161616@0.6:boxborderw=16:line_spacing=6,"
+        f"drawtext=fontfile={FONT_PATH}:textfile={txt_tag_path}:"
+        f"fontcolor=0xCCFF00:fontsize=42:x=(w-tw)/2:y=180"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=0x0A0A0A:s=1080x1920:d={dur}:r=24",
+        "-i", str(audio_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-shortest",
+        str(video_path),
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0:
+            log.error("ffmpeg failed: %s", (stderr or b"").decode(errors="ignore")[-2000:])
+            raise HTTPException(status_code=500, detail="Video render failed")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Video render timeout")
+
+    await db.contents.update_one(
+        {"id": content_id}, {"$set": {"video_ready": True}}
+    )
+    # url is served via /api/media/{content_id}.mp4
+    return VideoOut(id=content_id, video_url=f"/api/media/{content_id}.mp4")
+
+
+@api.get("/media/{filename}")
+async def media(filename: str):
+    p = MEDIA_DIR / filename
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    ct = "audio/mpeg" if filename.endswith(".mp3") else (
+        "video/mp4" if filename.endswith(".mp4") else "application/octet-stream"
+    )
+    return FileResponse(str(p), media_type=ct)
+
+
+# ---------------- Batch: 10 from 1 idea ----------------
+class BatchIn(BaseModel):
+    seed_idea: str
+    niche: str
+    tone: str = "energetic"
+    duration: str = "30s"
+    language: str = "English"
+    count: int = 10
+
+
+BATCH_SYS = """You are a viral short-form video content strategist.
+Given ONE seed idea, produce N distinct video variations, each as a shippable JSON object.
+Reply with a SINGLE JSON object: {"variations": [ { ...one video... }, ... ]}.
+
+Each variation has this schema (no markdown, no code fences):
+{
+  "ideas": ["idea 1", "idea 2", "idea 3"],
+  "script": "HOOK: ...\\n\\nBODY: ...\\n\\nCTA: ...",
+  "voiceover_text": "voiceover ready-to-record text with natural pauses",
+  "thumbnail_idea": "one paragraph describing thumbnail visual",
+  "caption": "instagram / youtube caption with 1–3 emojis",
+  "hashtags": ["#tag1", "#tag2", ...],   // 12–15 hashtags
+  "viral_score": 8,
+  "viral_reasoning": "why this scores well"
+}
+
+The variations MUST differ meaningfully (angle, hook, format: e.g. list, contrarian, story, POV, myth-buster, tutorial, before/after, etc.).
+"""
+
+
+async def generate_batch_ai(payload: BatchIn) -> List[dict]:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    count = max(2, min(10, payload.count))
+
+    user_msg = f"""Seed idea: {payload.seed_idea}
+Niche: {payload.niche}
+Tone: {payload.tone}
+Duration: {payload.duration}
+Language: {payload.language}
+Number of variations: {count}
+
+Return ONLY the JSON object with a "variations" array of length {count}."""
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"batch-{uuid.uuid4()}",
+        system_message=BATCH_SYS,
+    ).with_model("openai", "gpt-5.4")
+
+    raw = await chat.send_message(UserMessage(text=user_msg))
+    text = raw if isinstance(raw, str) else str(raw)
+    text = text.strip()
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        text = m.group(0)
+    parsed = json.loads(text)
+    variations = parsed.get("variations", [])
+    if not isinstance(variations, list) or not variations:
+        raise ValueError("No variations returned")
+    return variations[:count]
+
+
+@api.post("/content/batch", response_model=List[GeneratedContent])
+async def batch_generate(body: BatchIn, user=Depends(get_current_user)):
+    try:
+        variations = await generate_batch_ai(body)
+    except Exception as e:
+        log.exception("Batch generation failed")
+        raise HTTPException(status_code=502, detail=f"Batch failed: {e}")
+
+    now = datetime.now(tz=timezone.utc)
+    stored: List[dict] = []
+    for v in variations:
+        cid = str(uuid.uuid4())
+        tags = v.get("hashtags", []) or []
+        tags = [t if t.startswith("#") else f"#{t.lstrip('#')}" for t in tags if t]
+        try:
+            score = max(1, min(10, int(v.get("viral_score", 7))))
+        except Exception:
+            score = 7
+        doc = {
+            "id": cid,
+            "user_id": user["id"],
+            "ideas": v.get("ideas") or [body.seed_idea],
+            "script": v.get("script", ""),
+            "voiceover_text": v.get("voiceover_text", ""),
+            "thumbnail_idea": v.get("thumbnail_idea", ""),
+            "caption": v.get("caption", ""),
+            "hashtags": tags[:15] if len(tags) >= 12 else tags + [f"#viral{i}" for i in range(12 - len(tags))],
+            "viral_score": score,
+            "viral_reasoning": v.get("viral_reasoning", ""),
+            "niche": body.niche,
+            "duration": body.duration,
+            "language": body.language,
+            "tone": body.tone,
+            "created_at": now,
+            "saved": True,
+            "scheduled_at": None,
+        }
+        stored.append(doc)
+
+    if stored:
+        await db.contents.insert_many(stored)
+
+    # strip mongo/user fields for response
+    out = []
+    for d in stored:
+        d.pop("_id", None)
+        d.pop("user_id", None)
+        out.append(GeneratedContent(**d))
+    return out
 
 
 # ---------------- Schedule ----------------

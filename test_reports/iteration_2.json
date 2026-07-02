@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 2 backend + frontend verified end-to-end. All 9 new backend pytest cases pass in 33s: TTS voiceover generation (nova, ~10-15s), MP3 media serving, MP4 render via ffmpeg (~15-25s, 1080x1920), video-before-voiceover 400 guard, batch generation (count=3 returned 3 valid variations with 12-15 hashtags each), voiceover_ready/video_ready flags updated, and 404 for missing media. Frontend mobile viewport 390x844: Create screen 'Custom' niche chip opens input+apply and applies correctly, batch card opens modal with topic input + count-3/5/10 pills + run button, content viewer shows voiceover-generate-button which after tap produces play button (~15s TTS live), play/pause tap works, video-generate-button shows 'GENERATE VOICEOVER FIRST' pre-TTS. Onboarding custom niche flow (verified with a fresh signup, since demo user is already onboarded and is auto-redirected away from /onboarding by app/_layout.tsx guard) — chip opens input, apply sets custom niche 'Vertical Farming' and USING chip highlights and NEXT enables. Schedule notification permission not directly tested on web (expo-notifications logs a warning about push tokens on web — expected & non-blocking). No deprecated Expo packages: uses expo-audio 1.1.1 and expo-notifications 0.32.17 (no expo-av / expo-background-fetch / expo-barcode-scanner).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "global", "issues": ["Console warnings still present from RN Web: 'shadow*' style props deprecated (use boxShadow) and props.pointerEvents deprecated (use style.pointerEvents). Non-blocking, carried over from iteration 1."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_creatorai_v2.py",
+    "/app/test_reports/pytest/iter2_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL (carry-over): silence RN Web deprecated warnings — replace shadow* props with boxShadow and pointerEvents-as-prop with style.pointerEvents.",
+    "OPTIONAL: expo-notifications on web preview cannot request permission for local scheduled notifications; the frontend already handles this gracefully but consider hiding the 'Notify me' toggle on web or showing a small hint."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew to 745 lines with iter2 additions — still under 700-line preference is exceeded slightly; consider splitting into routers/media.py + routers/content.py in a follow-up.",
+    "generate_video() runs ffmpeg synchronously via asyncio.create_subprocess_exec with 120s timeout — good; ffprobe uses blocking subprocess.run but with 15s timeout — acceptable.",
+    "MEDIA_DIR is /tmp/creatorai_media which is ephemeral inside the container — MP3/MP4 will be lost on restart. Document this and/or set video_ready=false on startup, or move to a persisted volume in production.",
+    "Batch endpoint validates count via server-side clamp (2..10) — good.",
+    "MongoDB _id is properly excluded via projections {'_id': 0}.",
+    "Voiceover text is truncated to 4000 chars before TTS — sensible OpenAI TTS-1 guardrail."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_creatorai_v2.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 iter2 tests, iter1 suite still passing)",
+    "frontend": "100% of iter2 flows walked (custom niche on Create, batch modal open+pills, voiceover generate + play, video button state, onboarding custom via fresh signup)"
+  },
+  "seed_data_creation": "Fresh throwaway user created during onboarding walk-through (test_<epoch>@ai.co / password123). Demo user demo@creator.ai now has 11+ contents, at least one with voiceover_ready=true and video_ready=true after this run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend fully green. To test /onboarding UI, use a fresh signup — logged-in onboarded users are redirected to /(tabs) by app/_layout.tsx. Tab bar in (tabs)/_layout.tsx has no testIDs; use role=tab name='Home|Create|Schedule|Profile'. Content cards on Home use testID pattern recent-card-<uuid>. Voiceover fresh: tap voiceover-generate-button and wait ~15s for play button; MP4 render ~25s. Batch count=10 request may take 25-40s (test_batch_generate_count_3 uses count=3 for speed).",
+  "rca_of_issue": "No functional bugs. Only carry-over RN Web deprecation warnings and an ephemeral /tmp media directory to be aware of."
+}
