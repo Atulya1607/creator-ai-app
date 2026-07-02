@@ -68,6 +68,14 @@ export type Content = {
   voiceover_ready?: boolean;
   voiceover_voice?: string | null;
   video_ready?: boolean;
+  thumbnail_ready?: boolean;
+  thumbnail_tone?: string | null;
+};
+
+export type ThumbnailResp = {
+  id: string;
+  image_url: string;
+  prompt_used: string;
 };
 
 export type VoiceoverResp = {
@@ -124,7 +132,7 @@ export const api = {
   deleteContent: (id: string) =>
     request<{ ok: boolean }>(`/content/${id}`, { method: 'DELETE' }),
 
-  // voiceover + video
+  // voiceover + video + thumbnail
   voiceover: (id: string, voice = 'nova', speed = 1.0) =>
     request<VoiceoverResp>(`/content/${id}/voiceover`, {
       method: 'POST',
@@ -132,6 +140,11 @@ export const api = {
     }),
   video: (id: string) =>
     request<VideoResp>(`/content/${id}/video`, { method: 'POST' }),
+  thumbnail: (id: string, style?: string) =>
+    request<ThumbnailResp>(`/content/${id}/thumbnail`, {
+      method: 'POST',
+      body: JSON.stringify({ style: style ?? null }),
+    }),
 
   // batch
   batch: (payload: {

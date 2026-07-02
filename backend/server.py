@@ -110,6 +110,8 @@ class GeneratedContent(BaseModel):
     voiceover_ready: bool = False
     voiceover_voice: Optional[str] = None
     video_ready: bool = False
+    thumbnail_ready: bool = False
+    thumbnail_tone: Optional[str] = None
 
 
 class ScheduleIn(BaseModel):
@@ -344,6 +346,92 @@ async def delete_content(content_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+# ---------------- Thumbnail (Image gen) ----------------
+class ThumbnailIn(BaseModel):
+    style: Optional[str] = None  # optional override
+
+
+class ThumbnailOut(BaseModel):
+    id: str
+    image_url: str
+    prompt_used: str
+
+
+THUMB_STYLE_MAP = {
+    "energetic": "vibrant neon accents, dynamic pose, motion blur",
+    "shocking": "shocked facial expression, wide eyes, bold red accent",
+    "luxury": "gold and black palette, elegant lighting, premium look",
+    "educational": "clean layout, chalkboard/notebook motif, bright accent color",
+    "funny": "playful colors, exaggerated expression, cartoon energy",
+    "inspiring": "sunrise lighting, uplifting composition, warm palette",
+    "calm": "soft pastel palette, minimalist, serene composition",
+    "bold": "high contrast, powerful stance, dramatic shadows",
+}
+
+
+@api.post("/content/{content_id}/thumbnail", response_model=ThumbnailOut)
+async def generate_thumbnail(
+    content_id: str, body: ThumbnailIn, user=Depends(get_current_user)
+):
+    doc = await db.contents.find_one({"id": content_id, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    from emergentintegrations.llm.openai.image_generation import OpenAIImageGeneration
+
+    hook = ""
+    script = (doc.get("script") or "").strip()
+    if script:
+        m = re.match(r"(?:HOOK[:\s]*)(.+?)(?:\n\n|BODY|$)", script, re.IGNORECASE | re.DOTALL)
+        if m:
+            hook = m.group(1).strip()[:140]
+    if not hook:
+        hook = (doc.get("ideas") or [doc.get("caption", "")])[0][:140]
+
+    niche = doc.get("niche") or "content"
+    tone = (body.style or doc.get("tone") or "energetic").lower()
+    tone_hint = THUMB_STYLE_MAP.get(tone, "high contrast, cinematic lighting")
+    thumb_idea = (doc.get("thumbnail_idea") or "").strip()
+
+    prompt = (
+        "Create a high-quality, viral YouTube/Instagram thumbnail. "
+        "Use bold composition, high contrast, expressive subject (human face or symbolic object), "
+        "dramatic lighting, and attention-grabbing text overlay of 2 to 4 words maximum. "
+        "Modern, cinematic style optimized for high click-through rate. "
+        f"Niche: {niche}. Tone: {tone} ({tone_hint}). "
+        f"Video hook: {hook}. "
+        f"Visual direction: {thumb_idea}. "
+        "Vertical 9:16 crop-friendly framing. Do not include watermarks or logos."
+    )
+
+    try:
+        img_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
+        images = await img_gen.generate_images(
+            prompt=prompt, model="gpt-image-1", number_of_images=1, quality="low"
+        )
+    except Exception as e:
+        log.exception("Thumbnail generation failed")
+        raise HTTPException(status_code=502, detail=f"Thumbnail failed: {e}")
+
+    if not images:
+        raise HTTPException(status_code=502, detail="No image returned")
+
+    img_bytes = images[0]
+    img_path = MEDIA_DIR / f"{content_id}.png"
+    img_path.write_bytes(img_bytes)
+
+    await db.contents.update_one(
+        {"id": content_id},
+        {"$set": {"thumbnail_ready": True, "thumbnail_tone": tone}},
+    )
+
+    return ThumbnailOut(
+        id=content_id,
+        image_url=f"/api/media/{content_id}.png",
+        prompt_used=prompt,
+    )
+
+
 # ---------------- TTS ----------------
 class VoiceoverIn(BaseModel):
     voice: str = "nova"  # alloy / ash / coral / echo / fable / nova / onyx / sage / shimmer
@@ -464,26 +552,47 @@ async def generate_video(content_id: str, user=Depends(get_current_user)):
     txt_footer_path.write_text(_wrap_text(caption[:100], width=28), encoding="utf-8")
     txt_tag_path.write_text(f"#{(doc.get('niche') or 'AI').replace(' ', '')}", encoding="utf-8")
 
-    vf = (
+    thumb_path = MEDIA_DIR / f"{content_id}.png"
+    has_thumb = thumb_path.exists()
+
+    vf_common = (
         f"drawtext=fontfile={FONT_PATH}:textfile={txt_body_path}:"
         f"fontcolor=0xCCFF00:fontsize=72:x=(w-tw)/2:y=(h-th)/2-120:"
-        f"box=1:boxcolor=0x0A0A0A@0.4:boxborderw=24:line_spacing=10,"
+        f"box=1:boxcolor=0x0A0A0A@0.65:boxborderw=24:line_spacing=10,"
         f"drawtext=fontfile={FONT_PATH}:textfile={txt_footer_path}:"
         f"fontcolor=white:fontsize=36:x=(w-tw)/2:y=h-th-160:"
-        f"box=1:boxcolor=0x161616@0.6:boxborderw=16:line_spacing=6,"
+        f"box=1:boxcolor=0x161616@0.75:boxborderw=16:line_spacing=6,"
         f"drawtext=fontfile={FONT_PATH}:textfile={txt_tag_path}:"
         f"fontcolor=0xCCFF00:fontsize=42:x=(w-tw)/2:y=180"
     )
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=c=0x0A0A0A:s=1080x1920:d={dur}:r=24",
-        "-i", str(audio_path),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k", "-shortest",
-        str(video_path),
-    ]
+    if has_thumb:
+        # AI thumbnail as background: scale-cover to 1080x1920, darken, then overlay text
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-t", f"{dur}", "-i", str(thumb_path),
+            "-i", str(audio_path),
+            "-filter_complex",
+            (
+                f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920,eq=brightness=-0.15:contrast=1.05,"
+                f"{vf_common}[v]"
+            ),
+            "-map", "[v]", "-map", "1:a",
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-r", "24",
+            "-c:a", "aac", "-b:a", "128k", "-shortest",
+            str(video_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=0x0A0A0A:s=1080x1920:d={dur}:r=24",
+            "-i", str(audio_path),
+            "-vf", vf_common,
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-shortest",
+            str(video_path),
+        ]
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -511,7 +620,9 @@ async def media(filename: str):
     if not p.exists():
         raise HTTPException(status_code=404, detail="Not found")
     ct = "audio/mpeg" if filename.endswith(".mp3") else (
-        "video/mp4" if filename.endswith(".mp4") else "application/octet-stream"
+        "video/mp4" if filename.endswith(".mp4") else (
+            "image/png" if filename.endswith(".png") else "application/octet-stream"
+        )
     )
     return FileResponse(str(p), media_type=ct)
 

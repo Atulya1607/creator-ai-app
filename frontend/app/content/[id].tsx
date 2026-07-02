@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, Platform,
+  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, Platform, Image,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +13,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 import { colors, spacing, radius } from '@/src/theme';
 import { api, Content } from '@/src/api';
 import { ensureNotifPermission, scheduleReminder } from '@/src/notifications';
+import { downloadOrShare } from '@/src/download';
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL as string;
 
@@ -27,11 +28,13 @@ export default function ContentDetail() {
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
   const [scheduling, setScheduling] = useState(false);
 
-  // TTS + video state
+  // TTS + video + thumbnail state
   const [audioUri, setAudioUri] = useState<string | null>(null);
   const [ttsBusy, setTtsBusy] = useState(false);
   const [videoBusy, setVideoBusy] = useState(false);
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [thumbUri, setThumbUri] = useState<string | null>(null);
+  const [thumbBusy, setThumbBusy] = useState(false);
 
   const player = useAudioPlayer(audioUri ? { uri: audioUri } : null);
   const playerStatus = useAudioPlayerStatus(player);
@@ -47,6 +50,9 @@ export default function ContentDetail() {
       }
       if (data.video_ready) {
         setVideoUri(`${BACKEND}/api/media/${data.id}.mp4`);
+      }
+      if (data.thumbnail_ready) {
+        setThumbUri(`${BACKEND}/api/media/${data.id}.png`);
       }
     } finally {
       setLoading(false);
@@ -131,6 +137,35 @@ export default function ContentDetail() {
       flash(e.message || 'Video failed');
     } finally {
       setVideoBusy(false);
+    }
+  };
+
+  // ---- Thumbnail ----
+  const genThumbnail = async () => {
+    if (!c) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setThumbBusy(true);
+    try {
+      const r = await api.thumbnail(c.id);
+      setThumbUri(`${BACKEND}${r.image_url}?ts=${Date.now()}`);
+      setC({ ...c, thumbnail_ready: true });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      flash('Thumbnail ready');
+    } catch (e: any) {
+      flash(e.message || 'Thumbnail failed');
+    } finally {
+      setThumbBusy(false);
+    }
+  };
+
+  // ---- Download helpers ----
+  const dl = async (url: string, name: string, mime: string, label: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await downloadOrShare(url, name, mime);
+      flash(`${label} ready to save`);
+    } catch {
+      flash('Download failed');
     }
   };
 
@@ -276,35 +311,114 @@ export default function ContentDetail() {
                 )}
               </Pressable>
             ) : (
-              <View style={styles.playerBox}>
-                <Pressable
-                  testID="voiceover-play-button"
-                  onPress={togglePlay}
-                  style={styles.playCircle}
-                >
-                  <Ionicons
-                    name={playerStatus?.playing ? 'pause' : 'play'}
-                    size={22}
-                    color={colors.onBrandPrimary}
-                  />
-                </Pressable>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.trackBg}>
-                    <View style={[styles.trackFg, { width: `${progress * 100}%` }]} />
+              <View style={{ gap: spacing.sm }}>
+                <View style={styles.playerBox}>
+                  <Pressable
+                    testID="voiceover-play-button"
+                    onPress={togglePlay}
+                    style={styles.playCircle}
+                  >
+                    <Ionicons
+                      name={playerStatus?.playing ? 'pause' : 'play'}
+                      size={22}
+                      color={colors.onBrandPrimary}
+                    />
+                  </Pressable>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.trackBg}>
+                      <View style={[styles.trackFg, { width: `${progress * 100}%` }]} />
+                    </View>
+                    <Text style={styles.trackTime}>
+                      {fmtTime(playerStatus?.currentTime ?? 0)} / {fmtTime(playerStatus?.duration ?? 0)}
+                      {c.voiceover_voice ? `  • ${c.voiceover_voice}` : ''}
+                    </Text>
                   </View>
-                  <Text style={styles.trackTime}>
-                    {fmtTime(playerStatus?.currentTime ?? 0)} / {fmtTime(playerStatus?.duration ?? 0)}
-                    {c.voiceover_voice ? `  • ${c.voiceover_voice}` : ''}
-                  </Text>
                 </View>
+                <Pressable
+                  testID="voiceover-download-button"
+                  onPress={() => dl(audioUri, `${c.id}.mp3`, 'audio/mpeg', 'Voiceover')}
+                  style={[styles.actionBtn, styles.actionBtnGhost, { alignSelf: 'flex-start' }]}
+                >
+                  <Ionicons name="download" size={14} color={colors.brandPrimary} />
+                  <Text style={[styles.actionBtnText, { color: colors.brandPrimary }]}>
+                    DOWNLOAD MP3
+                  </Text>
+                </Pressable>
               </View>
             )}
           </View>
         </View>
 
-        {/* Thumbnail */}
-        <SectionTitle icon="image" title="THUMBNAIL IDEA" onCopy={() => copy(c.thumbnail_idea, 'Thumbnail idea')} />
-        <View style={styles.textCard}><Text style={styles.body}>{c.thumbnail_idea}</Text></View>
+        {/* Thumbnail — AI image generation */}
+        <SectionTitle icon="image" title="THUMBNAIL" />
+        <View style={styles.textCard}>
+          <Text style={[styles.body, { marginBottom: spacing.md }]}>{c.thumbnail_idea}</Text>
+
+          {thumbUri ? (
+            <View style={{ gap: spacing.md }}>
+              <Image
+                testID="thumbnail-image"
+                source={{ uri: thumbUri }}
+                style={styles.thumbImage}
+                resizeMode="cover"
+              />
+              <View style={styles.actionRow}>
+                <Pressable
+                  testID="thumbnail-download-button"
+                  onPress={() => dl(thumbUri, `${c.id}.png`, 'image/png', 'Thumbnail')}
+                  style={styles.actionBtn}
+                >
+                  <Ionicons name="download" size={16} color={colors.onBrandPrimary} />
+                  <Text style={styles.actionBtnText}>DOWNLOAD</Text>
+                </Pressable>
+                <Pressable
+                  testID="thumbnail-regenerate-button"
+                  onPress={genThumbnail}
+                  disabled={thumbBusy}
+                  style={[styles.actionBtn, styles.actionBtnGhost]}
+                >
+                  {thumbBusy ? (
+                    <ActivityIndicator color={colors.brandPrimary} />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh" size={14} color={colors.brandPrimary} />
+                      <Text style={[styles.actionBtnText, { color: colors.brandPrimary }]}>
+                        REGENERATE
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              testID="thumbnail-generate-button"
+              onPress={genThumbnail}
+              disabled={thumbBusy}
+              style={styles.playPill}
+            >
+              {thumbBusy ? (
+                <>
+                  <ActivityIndicator color={colors.onBrandPrimary} />
+                  <Text style={styles.playText}>PAINTING PIXELS…</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="image" size={16} color={colors.onBrandPrimary} />
+                  <Text style={styles.playText}>GENERATE THUMBNAIL</Text>
+                </>
+              )}
+            </Pressable>
+          )}
+          <Pressable
+            testID="copy-thumbnail-idea"
+            onPress={() => copy(c.thumbnail_idea, 'Thumbnail idea')}
+            style={[styles.copyBtn, { alignSelf: 'flex-start', marginTop: spacing.md }]}
+          >
+            <Ionicons name="copy-outline" size={14} color={colors.onSurface} />
+            <Text style={styles.copyText}>COPY IDEA TEXT</Text>
+          </Pressable>
+        </View>
 
         {/* Caption */}
         <SectionTitle icon="chatbubble-ellipses" title="CAPTION" onCopy={() => copy(c.caption, 'Caption')} />
@@ -326,7 +440,8 @@ export default function ContentDetail() {
         <SectionTitle icon="film" title="VIDEO EXPORT" />
         <View style={styles.textCard}>
           <Text style={styles.body}>
-            Render a vertical MP4 (1080×1920) with your voiceover + on-screen text — ready to upload.
+            Render a vertical MP4 (1080×1920) with your voiceover + on-screen text
+            {c.thumbnail_ready ? ' over your AI thumbnail background' : ''} — ready to upload.
           </Text>
           {!videoUri ? (
             <Pressable
@@ -353,25 +468,37 @@ export default function ContentDetail() {
             <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
               <View style={styles.videoBadge}>
                 <Ionicons name="checkmark-circle" size={16} color={colors.brandPrimary} />
-                <Text style={styles.videoBadgeText}>MP4 ready</Text>
+                <Text style={styles.videoBadgeText}>
+                  MP4 ready {c.thumbnail_ready ? '(with AI thumbnail)' : ''}
+                </Text>
               </View>
-              <Pressable
-                testID="video-copy-url-button"
-                onPress={() => copy(videoUri, 'Video URL')}
-                style={styles.videoUrlBtn}
-              >
-                <Ionicons name="link" size={14} color={colors.onSurface} />
-                <Text numberOfLines={1} style={styles.videoUrl}>{videoUri}</Text>
-              </Pressable>
-              <Pressable
-                testID="video-regenerate-button"
-                onPress={genVideo}
-                disabled={videoBusy}
-                style={[styles.playPill, { backgroundColor: colors.surfaceTertiary }]}
-              >
-                <Ionicons name="refresh" size={14} color={colors.brandPrimary} />
-                <Text style={[styles.playText, { color: colors.brandPrimary }]}>RE-RENDER</Text>
-              </Pressable>
+              <View style={styles.actionRow}>
+                <Pressable
+                  testID="video-download-button"
+                  onPress={() => dl(videoUri, `${c.id}.mp4`, 'video/mp4', 'Video')}
+                  style={styles.actionBtn}
+                >
+                  <Ionicons name="download" size={16} color={colors.onBrandPrimary} />
+                  <Text style={styles.actionBtnText}>DOWNLOAD MP4</Text>
+                </Pressable>
+                <Pressable
+                  testID="video-regenerate-button"
+                  onPress={genVideo}
+                  disabled={videoBusy}
+                  style={[styles.actionBtn, styles.actionBtnGhost]}
+                >
+                  {videoBusy ? (
+                    <ActivityIndicator color={colors.brandPrimary} />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh" size={14} color={colors.brandPrimary} />
+                      <Text style={[styles.actionBtnText, { color: colors.brandPrimary }]}>
+                        RE-RENDER
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
             </View>
           )}
         </View>
@@ -559,6 +686,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceTertiary, padding: spacing.md, borderRadius: radius.md,
   },
   videoUrl: { flex: 1, color: colors.onSurface, fontSize: 11, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }) },
+
+  thumbImage: {
+    width: '100%', aspectRatio: 9 / 16, maxHeight: 420,
+    borderRadius: radius.md, backgroundColor: colors.surfaceTertiary,
+  },
+  actionRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  actionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.lg, paddingVertical: 12,
+    borderRadius: radius.pill,
+  },
+  actionBtnGhost: {
+    backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border,
+  },
+  actionBtnText: { color: colors.onBrandPrimary, fontWeight: '900', letterSpacing: 1, fontSize: 12 },
 
   scheduledBox: {
     marginTop: spacing.xl, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
